@@ -3,6 +3,7 @@ import {
   EditOutlined,
   LoadingOutlined,
   PlusOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import {
   Button,
@@ -34,8 +35,6 @@ const DEFAULT_VARIABLES: TemplateVariable[] = [
   { key: 'company_address', label: 'Company Address', placeholder: 'Company Address', type: 'textarea', required: false, show_in_form: true },
   { key: 'signatory_name', label: 'Signatory Name', placeholder: 'Signatory Name', type: 'text', required: true, show_in_form: true },
   { key: 'signatory_designation', label: 'Signatory Designation', placeholder: 'Signatory Designation', type: 'text', required: false, show_in_form: true },
-  { key: 'gem_bid_no', label: 'GeM Bid No', placeholder: 'Enter Bid Number', type: 'text', required: true, show_in_form: true },
-  { key: 'date', label: 'Date', placeholder: 'Select Date', type: 'date', required: true, show_in_form: true },
   { key: 'signature', label: 'Signature', placeholder: 'Signature URL/Stamp', type: 'text', required: false, show_in_form: false },
 ];
 
@@ -63,6 +62,7 @@ const Templates = () => {
     setData: setTemplates,
   } = useCache<Template[]>('templates', 'all', [], fetchTemplates);
 
+  const [searchTerm, setSearchTerm] = useState('');
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [saving, setSaving] = useState(false);
@@ -217,6 +217,27 @@ const Templates = () => {
     );
   }
 
+  const filteredTemplates = templates.filter((tmpl) => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return true;
+    const nameMatch = tmpl.name.toLowerCase().includes(term);
+    const descMatch = tmpl.description.toLowerCase().includes(term);
+    let varList: TemplateVariable[] = [];
+    if (typeof tmpl.variables === 'string') {
+      try {
+        varList = JSON.parse(tmpl.variables);
+      } catch {
+        varList = [];
+      }
+    } else if (Array.isArray(tmpl.variables)) {
+      varList = tmpl.variables;
+    }
+    const varMatch = varList.some(
+      (v) => v.label.toLowerCase().includes(term) || v.key.toLowerCase().includes(term),
+    );
+    return nameMatch || descMatch || varMatch;
+  });
+
   return (
     <div style={{ maxWidth: 1000, margin: '0 auto', padding: '24px' }}>
       {contextHolder}
@@ -235,15 +256,28 @@ const Templates = () => {
         </Button>
       </div>
 
+      <Input
+        prefix={<SearchOutlined />}
+        placeholder="Search templates by name, description, or variable..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        allowClear
+        style={{ marginBottom: 20, maxWidth: 400 }}
+      />
+
       <Row gutter={[16, 16]}>
-        {templates.length === 0 ? (
+        {filteredTemplates.length === 0 ? (
           <Col span={24}>
             <Card style={{ textAlign: 'center', padding: '40px 0' }}>
-              <Typography.Text type="secondary">No templates found. Click "Create Template" to add one.</Typography.Text>
+              <Typography.Text type="secondary">
+                {searchTerm
+                  ? `No templates matching "${searchTerm}" found.`
+                  : 'No templates found. Click "Create Template" to add one.'}
+              </Typography.Text>
             </Card>
           </Col>
         ) : (
-          templates.map((tmpl) => {
+          filteredTemplates.map((tmpl) => {
             let varList: TemplateVariable[] = [];
             if (typeof tmpl.variables === 'string') {
               try {

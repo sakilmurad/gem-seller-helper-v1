@@ -27,6 +27,7 @@ function getCompanySettings() {
     marginTop: saved['Margin Top'],
     marginRight: saved['Margin Right'],
     marginBottom: saved['Margin Bottom'],
+    defaultSignatoryIndex: Number(saved['Default Signatory Index'] !== undefined ? saved['Default Signatory Index'] : 0),
     signatories: signatories
   };
 }
@@ -83,6 +84,7 @@ function normalizeSettings(settings) {
     'Margin Top': Number(settings['Margin Top'] !== undefined ? settings['Margin Top'] : (settings.marginTop || 0)),
     'Margin Right': Number(settings['Margin Right'] !== undefined ? settings['Margin Right'] : (settings.marginRight || 0)),
     'Margin Bottom': Number(settings['Margin Bottom'] !== undefined ? settings['Margin Bottom'] : (settings.marginBottom || 0)),
+    'Default Signatory Index': Number(settings['Default Signatory Index'] !== undefined ? settings['Default Signatory Index'] : (settings.defaultSignatoryIndex || 0)),
     'Signatories': signatoriesStr,
   };
 }
@@ -148,7 +150,7 @@ const DOCUMENTS_SHEET = 'Documents';
 function getDocuments() {
   const db = new SheetORM(DOCUMENTS_SHEET, { autoCreate: true });
   const records = db.all();
-  return records.map(function(r) {
+  const docs = records.map(function(r) {
     return {
       sNo: String(r['S No'] || ''),
       createdOn: String(r['Created On'] || ''),
@@ -156,8 +158,18 @@ function getDocuments() {
       title: String(r['Title'] || ''),
       variableValues: String(r['Variable Values'] || '{}'),
       pdfUrl: String(r['Pdf Url'] || ''),
+      content: String(r['Content'] || r.content || ''),
     };
   });
+
+  // Sort by Created On descending by default
+  docs.sort(function(a, b) {
+    var dA = new Date(a.createdOn).getTime() || 0;
+    var dB = new Date(b.createdOn).getTime() || 0;
+    return dB - dA;
+  });
+
+  return docs;
 }
 
 function saveDocument(doc) {
@@ -172,6 +184,7 @@ function saveDocument(doc) {
     'Title': doc.title || '',
     'Variable Values': typeof doc.variableValues === 'string' ? doc.variableValues : JSON.stringify(doc.variableValues || {}),
     'Pdf Url': doc.pdfUrl || '',
+    'Content': doc.content || '',
   };
 
   var existing = db.findOne({ 'S No': record['S No'] });
@@ -180,6 +193,25 @@ function saveDocument(doc) {
   } else {
     db.insert(record);
   }
+  return getDocuments();
+}
+
+function deleteDocument(sNo) {
+  const db = new SheetORM(DOCUMENTS_SHEET, { autoCreate: true });
+  var targetStr = String(sNo).trim();
+  const { records, rowNumbers } = db._readAll();
+  const rowsToDelete = [];
+  records.forEach(function(r, i) {
+    var cellVal = String(r['S No'] !== undefined && r['S No'] !== null ? r['S No'] : (r.sNo !== undefined ? r.sNo : '')).trim();
+    if (cellVal === targetStr) {
+      rowsToDelete.push(rowNumbers[i]);
+    }
+  });
+
+  rowsToDelete
+    .sort(function(a, b) { return b - a; })
+    .forEach(function(rowNum) { db.sheet.deleteRow(rowNum); });
+
   return getDocuments();
 }
 

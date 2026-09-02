@@ -1,4 +1,5 @@
 import {
+  CheckCircleOutlined,
   DeleteOutlined,
   LoadingOutlined,
   PlusOutlined,
@@ -20,31 +21,13 @@ import {
   Row,
   Space,
   Spin,
+  Tag,
   Typography,
   Upload,
 } from 'antd';
 import { useCallback, useState } from 'react';
 import { useCache } from '../hooks/useCache';
-
-type Signatory = {
-  names: string;
-  designations: string;
-  sign_stamp_urls: string;
-};
-
-type CompanySettings = {
-  companyName: string;
-  companyAddress: string;
-  PAN: string;
-  GST: string;
-  MSME: string;
-  letterheadUrl: string;
-  marginLeft: number;
-  marginTop: number;
-  marginRight: number;
-  marginBottom: number;
-  signatories: Signatory[];
-};
+import { getEffectiveDefaultSignatoryIndex, type CompanySettings, type Signatory } from '../lib/types';
 
 const BLANK_SETTINGS: CompanySettings = {
   companyName: '',
@@ -168,6 +151,18 @@ const Settings = () => {
       })),
     [setSettings],
   );
+
+  const setDefaultSignatory = (index: number) => {
+    setSettings((cur) => ({
+      ...cur,
+      defaultSignatoryIndex: index,
+      signatories: cur.signatories.map((s, i) => ({
+        ...s,
+        isDefault: i === index,
+      })),
+    }));
+    messageApi.success('Default signatory updated');
+  };
 
   const handleDriveUpload = async (file: File, slot: string, onDone: (url: string) => void) => {
     try {
@@ -407,18 +402,35 @@ const Settings = () => {
           <List
             dataSource={settings.signatories}
             locale={{ emptyText: 'No signatories added yet' }}
-            renderItem={(sig, idx) => (
-              <List.Item
-                actions={[
-                  <Popconfirm
-                    key="delete"
-                    title="Remove signatory?"
-                    onConfirm={() => removeSignatory(idx)}
-                  >
-                    <Button type="text" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>,
-                ]}
-              >
+            renderItem={(sig, idx) => {
+              const defaultIdx = getEffectiveDefaultSignatoryIndex(settings);
+              const isDefault = idx === defaultIdx;
+              return (
+                <List.Item
+                  actions={[
+                    isDefault ? (
+                      <Tag key="default" color="green" icon={<CheckCircleOutlined />}>
+                        Default
+                      </Tag>
+                    ) : (
+                      <Button
+                        key="setDefault"
+                        size="small"
+                        type="link"
+                        onClick={() => setDefaultSignatory(idx)}
+                      >
+                        Set as Default
+                      </Button>
+                    ),
+                    <Popconfirm
+                      key="delete"
+                      title="Remove signatory?"
+                      onConfirm={() => removeSignatory(idx)}
+                    >
+                      <Button type="text" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>,
+                  ]}
+                >
                 <Row gutter={16} align="middle" style={{ width: '100%' }}>
                   <Col xs={24} sm={4} style={{ textAlign: 'center' }}>
                     <Avatar
@@ -462,7 +474,8 @@ const Settings = () => {
                   </Col>
                 </Row>
               </List.Item>
-            )}
+            );
+          }}
           />
         </Card>
       </Space>

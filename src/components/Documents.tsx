@@ -5,6 +5,7 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
+  FileAddOutlined,
   FileTextOutlined,
   FileZipOutlined,
   LoadingOutlined,
@@ -24,6 +25,7 @@ import {
   message,
   Modal,
   Pagination,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -31,9 +33,15 @@ import {
   Steps,
   Table,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+import relativeTime from 'dayjs/plugin/relativeTime';
+
+dayjs.extend(customParseFormat);
+dayjs.extend(relativeTime);
 import { useCallback, useState } from 'react';
 import { useCache } from '../hooks/useCache';
 import {
@@ -44,6 +52,7 @@ import {
   type Template,
   type TemplateVariable,
 } from '../lib/types';
+import RichTextEditor from './RichTextEditor';
 
 const BLANK_SETTINGS: CompanySettings = {
   companyName: '', companyAddress: '', PAN: '', GST: '', MSME: '',
@@ -80,13 +89,41 @@ const formatDateFormatted = (dateObj: Date | string = new Date()): string => {
   return `${day} ${month} ${year}`;
 };
 
-const Documents = () => {
+// Format createdOn timestamp: relative for <= 3 days, formatted datetime like "12 Aug 2026 12:00 PM" after
+const formatCreatedOn = (dateStr?: string): string => {
+  if (!dateStr) return '-';
+  const d = dayjs(dateStr);
+  if (!d.isValid()) return dateStr;
+  const now = dayjs();
+  const diffInDays = now.diff(d, 'day', true);
+  if (diffInDays >= 0 && diffInDays <= 3) {
+    return d.fromNow();
+  }
+  return d.format('DD MMM YYYY hh:mm A');
+};
+
+// Safely parse date string for DatePicker
+const safeDayjs = (val?: string) => {
+  if (!val) return dayjs();
+  const formats = ['DD MMMM YYYY', 'DD MMM YYYY', 'YYYY-MM-DD', 'DD-MM-YYYY'];
+  const parsed = dayjs(val, formats, true);
+  if (parsed.isValid()) return parsed;
+  const fallback = dayjs(val);
+  return fallback.isValid() ? fallback : dayjs();
+};
+
+interface DocumentsProps {
+  externalSignatoryIdx?: number;
+  onSelectSignatoryIdx?: (idx: number) => void;
+}
+
+const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProps) => {
   const { data: templates, loading: loadingT } = useCache<Template[]>('templates', 'all', [], fetchTemplates);
   const { data: settings, loading: loadingS } = useCache<CompanySettings>('companySettings', 'main', BLANK_SETTINGS, fetchSettings);
   const { data: documents, setData: setDocuments } = useCache<DocumentRecord[]>('documents', 'all', [], fetchDocuments);
 
-  // Mode: 'list' (homepage) | 'generate' (wizard)
-  const [mode, setMode] = useState<'list' | 'generate'>('list');
+  // Mode: 'list' (homepage) | 'generate' (wizard) | 'custom_editor' (author blank letter)
+  const [mode, setMode] = useState<'list' | 'generate' | 'custom_editor'>('list');
 
   // Generation Wizard state
   const [step, setStep] = useState(0);
@@ -94,12 +131,34 @@ const Documents = () => {
   const [templateSearchTerm, setTemplateSearchTerm] = useState('');
   const [unifiedFormValues, setUnifiedFormValues] = useState<Record<string, string>>({});
   const [dynamicTableValues, setDynamicTableValues] = useState<Record<string, Record<string, string>[]>>({});
-  const [selectedSignatoryIdx, setSelectedSignatoryIdx] = useState(0);
+  const [internalSignatoryIdx, setInternalSignatoryIdx] = useState(0);
   const [messageApi, contextHolder] = message.useMessage();
+
+  // Active signatory index (synced with external prop if available)
+  const selectedSignatoryIdx = externalSignatoryIdx !== undefined ? externalSignatoryIdx : internalSignatoryIdx;
+  const setSelectedSignatoryIdx = (idx: number) => {
+    setInternalSignatoryIdx(idx);
+    onSelectSignatoryIdx?.(idx);
+    const newSig = settings.signatories[idx];
+    if (newSig) {
+      setUnifiedFormValues((prev) => ({
+        ...prev,
+        signatory_name: newSig.names || '',
+        signatory_designation: newSig.designations || '',
+      }));
+    }
+  };
+
+  // Custom Document Editor state
+  const [customDocTitle, setCustomDocTitle] = useState('');
+  const [customDocDate, setCustomDocDate] = useState(formatDateFormatted(new Date()));
+  const [customContent, setCustomContent] = useState('');
+  const [customPreviewModal, setCustomPreviewModal] = useState(false);
 
   // List View state (Homepage)
   const [docSearchTerm, setDocSearchTerm] = useState('');
   const [filterTemplateId, setFilterTemplateId] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'createdDesc' | 'createdAsc' | 'titleAsc' | 'titleDesc'>('createdDesc');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selectedDocRowKeys, setSelectedDocRowKeys] = useState<React.Key[]>([]);
@@ -140,15 +199,16 @@ const Documents = () => {
   const initFormValues = () => {
     const formattedToday = formatDateFormatted(new Date());
     const defaults: Record<string, string> = {
-      company_name: settings.companyName,
-      company_address: settings.companyAddress,
-      signatory_name: signatory?.names || '',
-      signatory_designation: signatory?.designations || '',
-      date: formattedToday,
       ...unifiedFormValues,
+      company_name: unifiedFormValues.company_name || settings.companyName,
+      company_address: unifiedFormValues.company_address || settings.companyAddress,
+      signatory_name: signatory?.names || unifiedFormValues.signatory_name || '',
+      signatory_designation: signatory?.designations || unifiedFormValues.signatory_designation || '',
     };
-    if (!defaults.date) {
-      defaults.date = formattedToday;
+    for (const v of uniqueFormVariables) {
+      if (v.type === 'date' && !defaults[v.key]) {
+        defaults[v.key] = formattedToday;
+      }
     }
     setUnifiedFormValues(defaults);
 
@@ -193,7 +253,7 @@ const Documents = () => {
           const tableHtml = renderDynamicTableHtml(v, tables[v.key] || []);
           html = html.replace(pattern, tableHtml);
         } else if (v.key === 'signature' && signatory?.sign_stamp_urls) {
-          html = html.replace(pattern, `<img src="${signatory.sign_stamp_urls}" alt="Signature" style="max-height:80px;"/>`);
+          html = html.replace(pattern, `<img src="${signatory.sign_stamp_urls}" alt="Signature" style="max-height:100px;"/>`);
         } else if (v.key === 'company_name') {
           html = html.replace(pattern, values[v.key] || settings.companyName || '');
         } else if (v.key === 'company_address') {
@@ -257,7 +317,7 @@ const Documents = () => {
 
       for (const tmpl of selectedTemplates) {
         const titleName = bidNo ? `Bid No: ${bidNo}` : `Date: ${dateVal}`;
-        const title = `${tmpl.name} — ${titleName}`;
+        const title = `${tmpl.name} - ${titleName}`;
 
         const combinedPayload = {
           formValues: unifiedFormValues,
@@ -275,7 +335,7 @@ const Documents = () => {
         newDocs.push(docRecord);
 
         // Async call to Google Sheets
-        serverCall('saveDocument', docRecord).catch(() => {});
+        serverCall('saveDocument', docRecord).catch(() => { });
       }
 
       setDocuments((prev) => [...newDocs, ...prev]);
@@ -313,10 +373,16 @@ const Documents = () => {
 
   // Preview Modal for Homepage Document List item
   const openDocPreviewModal = (doc: DocumentRecord) => {
-    const tmpl = templates.find((t) => t.id === doc.templateId);
+    let tmpl: Template | undefined = templates.find((t) => t.id === doc.templateId);
     if (!tmpl) {
-      messageApi.error('Template for this document no longer exists');
-      return;
+      tmpl = {
+        id: doc.templateId || '',
+        createdOn: doc.createdOn,
+        name: doc.title,
+        description: 'Custom Document',
+        content: doc.content || '<p>No content provided</p>',
+        variables: [],
+      };
     }
     let vals: Record<string, string> = {};
     let tbls: Record<string, Record<string, string>[]> = {};
@@ -335,6 +401,49 @@ const Documents = () => {
     setPreviewModalVisible(true);
   };
 
+  // Direct download PDF for a document record from homepage list
+  const downloadDocRecord = (doc: DocumentRecord) => {
+    let tmpl: Template | undefined = templates.find((t) => t.id === doc.templateId);
+    if (!tmpl) {
+      tmpl = {
+        id: doc.templateId || '',
+        createdOn: doc.createdOn,
+        name: doc.title,
+        description: 'Custom Document',
+        content: doc.content || '<p>No content provided</p>',
+        variables: [],
+      };
+    }
+    let vals: Record<string, string> = {};
+    let tbls: Record<string, Record<string, string>[]> = {};
+    try {
+      const parsed = JSON.parse(doc.variableValues);
+      if (parsed.formValues || parsed.tables) {
+        vals = parsed.formValues || {};
+        tbls = parsed.tables || {};
+      } else {
+        vals = parsed;
+      }
+    } catch {
+      vals = {};
+    }
+    downloadSinglePdf(tmpl, vals, tbls);
+  };
+
+  // Delete document record
+  const handleDeleteDoc = async (sNo: string) => {
+    try {
+      await serverCall('deleteDocument', sNo);
+      setDocuments((prev) => prev.filter((d) => d.sNo !== sNo));
+      setSelectedDocRowKeys((prev) => prev.filter((k) => k !== sNo));
+      messageApi.success('Document deleted successfully');
+    } catch {
+      setDocuments((prev) => prev.filter((d) => d.sNo !== sNo));
+      setSelectedDocRowKeys((prev) => prev.filter((k) => k !== sNo));
+      messageApi.info('Document removed from cache');
+    }
+  };
+
   // Download multiple selected docs from homepage table
   const downloadSelectedDocsPdf = () => {
     const selectedDocs = documents.filter((d) => selectedDocRowKeys.includes(d.sNo));
@@ -344,8 +453,17 @@ const Documents = () => {
     if (!win) { messageApi.error('Pop-up blocked.'); return; }
 
     const combinedHtml = selectedDocs.map((doc) => {
-      const tmpl = templates.find((t) => t.id === doc.templateId);
-      if (!tmpl) return '';
+      let tmpl: Template | undefined = templates.find((t) => t.id === doc.templateId);
+      if (!tmpl) {
+        tmpl = {
+          id: doc.templateId || '',
+          createdOn: doc.createdOn,
+          name: doc.title,
+          description: 'Custom Document',
+          content: doc.content || '',
+          variables: [],
+        };
+      }
       let vals: Record<string, string> = {};
       let tbls: Record<string, Record<string, string>[]> = {};
       try {
@@ -391,18 +509,88 @@ const Documents = () => {
     });
   };
 
+  // Quick Insert helper for custom document editor (inline insertion without extra line breaks)
+  const insertValueIntoCustomContent = (val: string) => {
+    setCustomContent((prev) => {
+      if (!prev || prev === '<p></p>' || prev.trim() === '') return `<p>${val}</p>`;
+      if (prev.endsWith('</p>')) {
+        return prev.slice(0, -4) + ` ${val}</p>`;
+      }
+      return `${prev} ${val}`;
+    });
+    messageApi.success('Value inserted!');
+  };
+
+  // Save Custom Document to Sheet & Cache
+  const handleSaveCustomDocument = async (downloadPdfAfterSave = false) => {
+    if (!customDocTitle.trim()) {
+      messageApi.warning('Please enter document title');
+      return;
+    }
+    if (!customContent.trim()) {
+      messageApi.warning('Please enter document content');
+      return;
+    }
+
+    const createdOn = new Date().toISOString();
+    const docRecord: DocumentRecord = {
+      sNo: String(Date.now() + Math.floor(Math.random() * 1000)),
+      createdOn,
+      templateId: '',
+      title: customDocTitle.trim(),
+      variableValues: JSON.stringify({ custom: true }),
+      pdfUrl: '',
+      content: customContent,
+    };
+
+    try {
+      await serverCall('saveDocument', docRecord);
+      setDocuments((prev) => [docRecord, ...prev]);
+      messageApi.success('Custom document saved successfully!');
+    } catch {
+      setDocuments((prev) => [docRecord, ...prev]);
+      messageApi.info('Custom document saved to cache');
+    }
+
+    if (downloadPdfAfterSave) {
+      downloadDocRecord(docRecord);
+    }
+    setMode('list');
+  };
+
   // Filter templates for step 0
   const filteredTemplates = templates.filter((t) =>
     t.name.toLowerCase().includes(templateSearchTerm.toLowerCase()) ||
     t.description.toLowerCase().includes(templateSearchTerm.toLowerCase())
   );
 
-  // Filter documents for homepage list
-  const filteredDocuments = documents.filter((d) => {
-    const matchesSearch = d.title.toLowerCase().includes(docSearchTerm.toLowerCase());
-    const matchesFilter = filterTemplateId === 'all' || d.templateId === filterTemplateId;
-    return matchesSearch && matchesFilter;
-  });
+  // Filter & Sort documents for homepage list
+  const filteredDocuments = documents
+    .filter((d) => {
+      const matchesSearch = d.title.toLowerCase().includes(docSearchTerm.toLowerCase());
+      const matchesFilter =
+        filterTemplateId === 'all'
+          ? true
+          : filterTemplateId === 'custom'
+            ? !d.templateId || Boolean(d.content)
+            : d.templateId === filterTemplateId;
+      return matchesSearch && matchesFilter;
+    })
+    .sort((a, b) => {
+      if (sortBy === 'createdDesc') {
+        return (new Date(b.createdOn).getTime() || 0) - (new Date(a.createdOn).getTime() || 0);
+      }
+      if (sortBy === 'createdAsc') {
+        return (new Date(a.createdOn).getTime() || 0) - (new Date(b.createdOn).getTime() || 0);
+      }
+      if (sortBy === 'titleAsc') {
+        return a.title.localeCompare(b.title);
+      }
+      if (sortBy === 'titleDesc') {
+        return b.title.localeCompare(a.title);
+      }
+      return 0;
+    });
 
   const paginatedDocuments = filteredDocuments.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
@@ -411,6 +599,193 @@ const Documents = () => {
       <div style={{ textAlign: 'center', padding: '60px 0' }}>
         <Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} spin />} />
         <div style={{ marginTop: 12 }}>Loading...</div>
+      </div>
+    );
+  }
+
+  /* ================================================================== */
+  /*  CUSTOM DOCUMENT EDITOR VIEW                                      */
+  /* ================================================================== */
+  if (mode === 'custom_editor') {
+    return (
+      <div style={{ maxWidth: 1000, margin: '0 auto', padding: '24px' }}>
+        {contextHolder}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <div>
+            <Typography.Title level={2} style={{ margin: 0 }}>Create Custom Document</Typography.Title>
+            <Typography.Text type="secondary">Author a custom letter from scratch without a pre-existing template</Typography.Text>
+          </div>
+          <Button onClick={() => setMode('list')}>Cancel &amp; Back to List</Button>
+        </div>
+
+        <Card variant="outlined" style={{ marginBottom: 20 }}>
+          <Row gutter={16}>
+            <Col xs={24} sm={14}>
+              <Form.Item label="Document Title" required>
+                <Input
+                  placeholder="e.g. Special Undertaking Letter - Bid #12345"
+                  value={customDocTitle}
+                  onChange={(e) => setCustomDocTitle(e.target.value)}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={10}>
+              <Form.Item label="Document Date">
+                <DatePicker
+                  style={{ width: '100%' }}
+                  format="DD MMMM YYYY"
+                  value={safeDayjs(customDocDate)}
+                  onChange={(dateObj, dateStr) => {
+                    const val = dateObj ? dateObj.format('DD MMMM YYYY') : (typeof dateStr === 'string' ? dateStr : '');
+                    setCustomDocDate(val);
+                  }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* Quick Insert Variables Bar */}
+          <div style={{ background: '#fafafa', padding: '12px 16px', borderRadius: 6, marginBottom: 20, border: '1px dashed #d9d9d9' }}>
+            <Typography.Text strong style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+              Quick Insert Values (Click to insert current value into editor):
+            </Typography.Text>
+            <Space wrap size={[8, 8]}>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => insertValueIntoCustomContent(settings.companyName || 'Company Name')}
+              >
+                Company Name
+              </Button>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => insertValueIntoCustomContent((settings.companyAddress || 'Company Address').replace(/\n/g, '<br/>'))}
+              >
+                Company Address
+              </Button>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => insertValueIntoCustomContent(signatory?.names || 'Signatory Name')}
+              >
+                Signatory Name ({signatory?.names || 'Default'})
+              </Button>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => insertValueIntoCustomContent(signatory?.designations || 'Signatory Designation')}
+              >
+                Signatory Designation
+              </Button>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => insertValueIntoCustomContent(customDocDate || formatDateFormatted(new Date()))}
+              >
+                Date ({customDocDate})
+              </Button>
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => {
+                  if (signatory?.sign_stamp_urls) {
+                    insertValueIntoCustomContent(`<img src="${signatory.sign_stamp_urls}" alt="Signature" style="max-height:90px;"/>`);
+                  } else {
+                    messageApi.warning('No signature URL set for active signatory');
+                  }
+                }}
+              >
+                Signature Stamp
+              </Button>
+            </Space>
+          </div>
+
+          <Form.Item label="Letter Body Editor" required>
+            <RichTextEditor
+              value={customContent}
+              onChange={setCustomContent}
+              variables={[]}
+              onAddVariable={() => {}}
+            />
+          </Form.Item>
+
+          <Divider />
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12 }}>
+            <Button onClick={() => setMode('list')}>Cancel</Button>
+            <Button icon={<EyeOutlined />} onClick={() => setCustomPreviewModal(true)}>
+              Preview on Letterhead
+            </Button>
+            <Button type="primary" icon={<DownloadOutlined />} onClick={() => handleSaveCustomDocument(true)}>
+              Save &amp; Download PDF
+            </Button>
+          </div>
+        </Card>
+
+        {/* Modal for Custom Document Preview */}
+        <Modal
+          title={customDocTitle || 'Custom Document Preview'}
+          open={customPreviewModal}
+          onCancel={() => setCustomPreviewModal(false)}
+          width={860}
+          footer={[
+            <Button key="close" onClick={() => setCustomPreviewModal(false)}>
+              Close Preview
+            </Button>,
+            <Button
+              key="download"
+              type="primary"
+              icon={<DownloadOutlined />}
+              onClick={() => {
+                setCustomPreviewModal(false);
+                handleSaveCustomDocument(true);
+              }}
+            >
+              Save &amp; Download PDF
+            </Button>,
+          ]}
+        >
+          <div
+            style={{
+              overflow: 'auto',
+              maxHeight: 650,
+              border: '1px solid #e8e8e8',
+              borderRadius: 6,
+              background: '#f0f0f0',
+              padding: 16,
+            }}
+          >
+            <div
+              style={{
+                width: '210mm',
+                minHeight: '297mm',
+                margin: '0 auto',
+                position: 'relative',
+                background: '#fff',
+                boxShadow: '0 2px 12px rgba(0,0,0,0.12)',
+                backgroundImage: settings.letterheadUrl ? `url('${settings.letterheadUrl}')` : undefined,
+                backgroundSize: 'contain',
+                backgroundRepeat: 'no-repeat',
+                backgroundPosition: 'center top',
+              }}
+            >
+              <div
+                style={{
+                  padding: `${mmToPx(settings.marginTop)}px ${mmToPx(settings.marginRight)}px ${mmToPx(settings.marginBottom)}px ${mmToPx(settings.marginLeft)}px`,
+                  minHeight: '297mm',
+                  boxSizing: 'border-box',
+                  fontFamily: "'Inter', Arial, sans-serif",
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                  color: '#222',
+                }}
+                dangerouslySetInnerHTML={{ __html: customContent || '<p>Empty letter content</p>' }}
+              />
+            </div>
+          </div>
+        </Modal>
       </div>
     );
   }
@@ -427,15 +802,20 @@ const Documents = () => {
             <Typography.Title level={2} style={{ margin: 0 }}>Documents</Typography.Title>
             <Typography.Text type="secondary">Generated letters and official documents</Typography.Text>
           </div>
-          <Button type="primary" icon={<FileTextOutlined />} onClick={() => { setMode('generate'); setStep(0); setSelectedTemplateIds([]); setUnifiedFormValues({}); setDynamicTableValues({}); }}>
-            Generate Documents
-          </Button>
+          <Space>
+            <Button icon={<FileAddOutlined />} onClick={() => { setMode('custom_editor'); setCustomDocTitle(''); setCustomDocDate(formatDateFormatted(new Date())); setCustomContent(''); }}>
+              Create Custom Document
+            </Button>
+            <Button type="primary" icon={<FileTextOutlined />} onClick={() => { setMode('generate'); setStep(0); setSelectedTemplateIds([]); setUnifiedFormValues({}); setDynamicTableValues({}); }}>
+              Generate Documents
+            </Button>
+          </Space>
         </div>
 
-        {/* Toolbar: Search, Filter, Bulk Download */}
+        {/* Toolbar: Search, Filter, Sort, Bulk Download */}
         <Card variant="outlined" style={{ marginBottom: 20 }}>
-          <Row gutter={[16, 16]} align="middle">
-            <Col xs={24} sm={10}>
+          <Row gutter={[12, 12]} align="middle">
+            <Col xs={24} sm={8}>
               <Input
                 prefix={<SearchOutlined />}
                 placeholder="Search generated documents..."
@@ -443,21 +823,35 @@ const Documents = () => {
                 onChange={(e) => { setDocSearchTerm(e.target.value); setCurrentPage(1); }}
               />
             </Col>
-            <Col xs={24} sm={8}>
+            <Col xs={24} sm={7}>
               <Select
                 style={{ width: '100%' }}
                 value={filterTemplateId}
                 onChange={(val) => { setFilterTemplateId(val); setCurrentPage(1); }}
                 options={[
-                  { value: 'all', label: 'All Templates' },
+                  { value: 'all', label: 'All Templates & Custom' },
+                  { value: 'custom', label: 'Custom Letters Only' },
                   ...templates.map((t) => ({ value: t.id, label: t.name })),
                 ]}
               />
             </Col>
-            <Col xs={24} sm={6} style={{ textAlign: 'right' }}>
+            <Col xs={24} sm={5}>
+              <Select
+                style={{ width: '100%' }}
+                value={sortBy}
+                onChange={(val) => setSortBy(val)}
+                options={[
+                  { value: 'createdDesc', label: 'Sort: Newest First' },
+                  { value: 'createdAsc', label: 'Sort: Oldest First' },
+                  { value: 'titleAsc', label: 'Sort: Title A-Z' },
+                  { value: 'titleDesc', label: 'Sort: Title Z-A' },
+                ]}
+              />
+            </Col>
+            <Col xs={24} sm={4} style={{ textAlign: 'right' }}>
               {selectedDocRowKeys.length > 0 && (
                 <Button icon={<FileZipOutlined />} type="primary" onClick={downloadSelectedDocsPdf}>
-                  Download ({selectedDocRowKeys.length}) PDF / ZIP
+                  Download ({selectedDocRowKeys.length}) PDF
                 </Button>
               )}
             </Col>
@@ -484,25 +878,43 @@ const Documents = () => {
               title: 'Template',
               dataIndex: 'templateId',
               key: 'templateId',
-              render: (id) => {
+              render: (id, record) => {
+                if (!id || record.content) {
+                  return <Tag color="purple">Custom Letter</Tag>;
+                }
                 const tmpl = templates.find((t) => t.id === id);
-                return tmpl ? <Tag color="blue">{tmpl.name}</Tag> : <Tag>Unknown</Tag>;
+                return tmpl ? <Tag color="blue">{tmpl.name}</Tag> : <Tag color="orange">Unknown</Tag>;
               },
             },
             {
               title: 'Created On',
               dataIndex: 'createdOn',
               key: 'createdOn',
-              render: (d) => (d ? new Date(d).toLocaleDateString() + ' ' + new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-'),
+              render: (d) => formatCreatedOn(d),
             },
             {
               title: 'Action',
               key: 'action',
               render: (_, record) => (
                 <Space>
-                  <Button size="small" icon={<EyeOutlined />} onClick={() => openDocPreviewModal(record)}>
-                    Preview / Download
-                  </Button>
+                  <Tooltip title="Preview">
+                    <Button size="small" icon={<EyeOutlined />} onClick={() => openDocPreviewModal(record)} />
+                  </Tooltip>
+                  <Tooltip title="Download PDF">
+                    <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadDocRecord(record)} />
+                  </Tooltip>
+                  <Popconfirm
+                    title="Delete document?"
+                    description="Are you sure you want to delete this document?"
+                    onConfirm={() => handleDeleteDoc(record.sNo)}
+                    okText="Delete"
+                    cancelText="Cancel"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Tooltip title="Delete">
+                      <Button size="small" danger icon={<DeleteOutlined />} />
+                    </Tooltip>
+                  </Popconfirm>
                 </Space>
               ),
             },
@@ -758,17 +1170,18 @@ const Documents = () => {
                           <DatePicker
                             style={{ width: '100%' }}
                             format="DD MMMM YYYY"
-                            value={
-                              unifiedFormValues[v.key]
-                                ? dayjs(unifiedFormValues[v.key], ['DD MMMM YYYY', 'YYYY-MM-DD'])
-                                : dayjs()
-                            }
-                            onChange={(_d, dateStr) =>
+                            value={safeDayjs(unifiedFormValues[v.key])}
+                            onChange={(dateObj, dateStr) => {
+                              const val = dateObj
+                                ? dateObj.format('DD MMMM YYYY')
+                                : typeof dateStr === 'string'
+                                  ? dateStr
+                                  : '';
                               setUnifiedFormValues((prev) => ({
                                 ...prev,
-                                [v.key]: typeof dateStr === 'string' ? dateStr : formatDateFormatted(new Date()),
-                              }))
-                            }
+                                [v.key]: val,
+                              }));
+                            }}
                           />
                         ) : (
                           <Input
@@ -893,7 +1306,7 @@ const Documents = () => {
             icon={<CheckCircleOutlined />}
             onClick={() => { setMode('list'); setStep(0); setSelectedTemplateIds([]); setUnifiedFormValues({}); setDynamicTableValues({}); }}
           >
-            Done — Back to Homepage
+            Done
           </Button>
         )}
       </div>

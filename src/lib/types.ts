@@ -4,6 +4,7 @@ export type Signatory = {
   names: string;
   designations: string;
   sign_stamp_urls: string;
+  isDefault?: boolean;
 };
 
 export type CompanySettings = {
@@ -17,7 +18,21 @@ export type CompanySettings = {
   marginTop: number;
   marginRight: number;
   marginBottom: number;
+  defaultSignatoryIndex?: number;
   signatories: Signatory[];
+};
+
+export const getEffectiveDefaultSignatoryIndex = (settings: CompanySettings): number => {
+  if (!settings.signatories || settings.signatories.length === 0) return 0;
+  if (
+    settings.defaultSignatoryIndex !== undefined &&
+    settings.defaultSignatoryIndex >= 0 &&
+    settings.defaultSignatoryIndex < settings.signatories.length
+  ) {
+    return settings.defaultSignatoryIndex;
+  }
+  const found = settings.signatories.findIndex((s) => s.isDefault);
+  return found !== -1 ? found : 0;
 };
 
 export interface TemplateVariable {
@@ -46,6 +61,7 @@ export interface DocumentRecord {
   title: string;
   variableValues: string;
   pdfUrl: string;
+  content?: string;
 }
 
 /* ---- Google Apps Script bridge ---- */
