@@ -9,6 +9,7 @@ import {
   FileZipOutlined,
   LoadingOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import {
@@ -120,7 +121,7 @@ interface DocumentsProps {
 const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProps) => {
   const { data: templates, loading: loadingT } = useCache<Template[]>('templates', 'all', [], fetchTemplates);
   const { data: settings, loading: loadingS } = useCache<CompanySettings>('companySettings', 'main', BLANK_SETTINGS, fetchSettings);
-  const { data: documents, setData: setDocuments } = useCache<DocumentRecord[]>('documents', 'all', [], fetchDocuments);
+  const { data: documents, setData: setDocuments, refresh: refreshDocuments, refreshing: refreshingDocs } = useCache<DocumentRecord[]>('documents', 'all', [], fetchDocuments);
 
   // Mode: 'list' (homepage) | 'generate' (wizard) | 'custom_editor' (author blank letter)
   const [mode, setMode] = useState<'list' | 'generate' | 'custom_editor'>('list');
@@ -157,6 +158,9 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
   const [customContent, setCustomContent] = useState('');
   const [customPreviewModal, setCustomPreviewModal] = useState(false);
   const customEditorRef = useRef<RichTextEditorRef>(null);
+
+  // Save & Download loader state
+  const [savingCustomDoc, setSavingCustomDoc] = useState(false);
 
   // List View state (Homepage)
   const [docSearchTerm, setDocSearchTerm] = useState('');
@@ -543,36 +547,41 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
       return;
     }
 
-    const createdOn = editingCreatedOn || new Date().toISOString();
-    const docRecord: DocumentRecord = {
-      sNo: editingSNo || String(Date.now() + Math.floor(Math.random() * 1000)),
-      createdOn,
-      templateId: '',
-      title: customDocTitle.trim(),
-      variableValues: JSON.stringify({ custom: true }),
-      pdfUrl: '',
-      content: customContent,
-    };
-
+    setSavingCustomDoc(true);
     try {
-      await serverCall('saveDocument', docRecord);
-      setDocuments((prev) => {
-        const exists = prev.some((d) => d.sNo === docRecord.sNo);
-        return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
-      });
-      messageApi.success('Document saved successfully!');
-    } catch {
-      setDocuments((prev) => {
-        const exists = prev.some((d) => d.sNo === docRecord.sNo);
-        return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
-      });
-      messageApi.info('Document saved to cache');
-    }
+      const createdOn = editingCreatedOn || new Date().toISOString();
+      const docRecord: DocumentRecord = {
+        sNo: editingSNo || String(Date.now() + Math.floor(Math.random() * 1000)),
+        createdOn,
+        templateId: '',
+        title: customDocTitle.trim(),
+        variableValues: JSON.stringify({ custom: true }),
+        pdfUrl: '',
+        content: customContent,
+      };
 
-    if (downloadPdfAfterSave) {
-      downloadDocRecord(docRecord);
+      try {
+        await serverCall('saveDocument', docRecord);
+        setDocuments((prev) => {
+          const exists = prev.some((d) => d.sNo === docRecord.sNo);
+          return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
+        });
+        messageApi.success('Document saved successfully!');
+      } catch {
+        setDocuments((prev) => {
+          const exists = prev.some((d) => d.sNo === docRecord.sNo);
+          return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
+        });
+        messageApi.info('Document saved to cache');
+      }
+
+      if (downloadPdfAfterSave) {
+        downloadDocRecord(docRecord);
+      }
+      setMode('list');
+    } finally {
+      setSavingCustomDoc(false);
     }
-    setMode('list');
   };
 
   // Edit existing document/letter
@@ -761,7 +770,7 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
             <Button icon={<EyeOutlined />} onClick={() => setCustomPreviewModal(true)}>
               Preview on Letterhead
             </Button>
-            <Button type="primary" icon={<DownloadOutlined />} onClick={() => handleSaveCustomDocument(true)}>
+            <Button type="primary" icon={<DownloadOutlined />} loading={savingCustomDoc} onClick={() => handleSaveCustomDocument(true)}>
               Save &amp; Download PDF
             </Button>
           </div>
@@ -781,6 +790,7 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
               key="download"
               type="primary"
               icon={<DownloadOutlined />}
+              loading={savingCustomDoc}
               onClick={() => {
                 setCustomPreviewModal(false);
                 handleSaveCustomDocument(true);
@@ -845,6 +855,7 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
             <Typography.Title level={2} style={{ margin: 0 }}>Documents</Typography.Title>
             <Typography.Text type="secondary">Generated letters and official documents</Typography.Text>
           </div>
+          <Button icon={<ReloadOutlined />} loading={refreshingDocs} onClick={refreshDocuments}>Refresh</Button>
         </div>
 
         {/* Toolbar: Search, Filter, Sort, Bulk Download */}

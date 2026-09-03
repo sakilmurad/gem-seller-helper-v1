@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   BookOutlined,
   CheckCircleOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EyeOutlined,
   FileAddOutlined,
@@ -111,14 +112,6 @@ const formatDateFormatted = (dateObj: Date | string = new Date()): string => {
   return `${day} ${month} ${year}`;
 };
 
-const safeDayjs = (val?: string) => {
-  if (!val) return dayjs();
-  const formats = ['DD MMMM YYYY', 'DD MMM YYYY', 'YYYY-MM-DD', 'DD-MM-YYYY'];
-  const parsed = dayjs(val, formats, true);
-  if (parsed.isValid()) return parsed;
-  const fallback = dayjs(val);
-  return fallback.isValid() ? fallback : dayjs();
-};
 
 interface GenerateProps {
   onNavigateToDocuments?: () => void;
@@ -153,6 +146,7 @@ const Generate: React.FC<GenerateProps> = ({
   const [customDocDate, setCustomDocDate] = useState(formatDateFormatted(new Date()));
   const [customContent, setCustomContent] = useState('');
   const [customPreviewModal, setCustomPreviewModal] = useState(false);
+  const [savingCustomDoc, setSavingCustomDoc] = useState(false);
   const customEditorRef = useRef<RichTextEditorRef>(null);
 
   // AI Prompt Generator state
@@ -202,42 +196,47 @@ const Generate: React.FC<GenerateProps> = ({
       return;
     }
 
-    const createdOn = editingCreatedOn || new Date().toISOString();
-    const docRecord: DocumentRecord = {
-      sNo: editingSNo || String(Date.now() + Math.floor(Math.random() * 1000)),
-      createdOn,
-      templateId: '',
-      title: customDocTitle.trim(),
-      variableValues: JSON.stringify({ custom: true }),
-      pdfUrl: '',
-      content: customContent,
-    };
-
+    setSavingCustomDoc(true);
     try {
-      await serverCall('saveDocument', docRecord);
-      messageApi.success('Document saved successfully!');
-    } catch {
-      messageApi.info('Document saved to cache');
-    }
+      const createdOn = editingCreatedOn || new Date().toISOString();
+      const docRecord: DocumentRecord = {
+        sNo: editingSNo || String(Date.now() + Math.floor(Math.random() * 1000)),
+        createdOn,
+        templateId: '',
+        title: customDocTitle.trim(),
+        variableValues: JSON.stringify({ custom: true }),
+        pdfUrl: '',
+        content: customContent,
+      };
 
-    if (downloadPdfAfterSave) {
-      downloadSinglePdf(
-        {
-          id: '',
-          createdOn,
-          name: customDocTitle,
-          description: '',
-          content: customContent,
-          variables: [],
-        },
-        {},
-      );
-    }
+      try {
+        await serverCall('saveDocument', docRecord);
+        messageApi.success('Document saved successfully!');
+      } catch {
+        messageApi.info('Document saved to cache');
+      }
 
-    if (onNavigateToDocuments) {
-      onNavigateToDocuments();
-    } else {
-      setMode('cards');
+      if (downloadPdfAfterSave) {
+        downloadSinglePdf(
+          {
+            id: '',
+            createdOn,
+            name: customDocTitle,
+            description: '',
+            content: customContent,
+            variables: [],
+          },
+          {},
+        );
+      }
+
+      if (onNavigateToDocuments) {
+        onNavigateToDocuments();
+      } else {
+        setMode('cards');
+      }
+    } finally {
+      setSavingCustomDoc(false);
     }
   };
 
@@ -250,18 +249,26 @@ const Generate: React.FC<GenerateProps> = ({
 
     setAiLoading(true);
     try {
-      const companyInfoStr = aiInjectCompany
-        ? `${settings.companyName || ''} - ${settings.companyAddress || ''}`.trim()
+      // Build structured company and signatory details
+      const companyDetails = aiInjectCompany
+        ? [
+            settings.companyName ? `Company Name: ${settings.companyName}` : '',
+            settings.companyAddress ? `Address: ${settings.companyAddress}` : '',
+            settings.PAN ? `PAN: ${settings.PAN}` : '',
+            settings.GST ? `GST/GSTIN: ${settings.GST}` : '',
+            settings.MSME ? `MSME No.: ${settings.MSME}` : '',
+          ].filter(Boolean).join('\n')
         : '';
-      const consigneeInfoStr = aiInjectConsignee
-        ? `${signatory?.names || ''} (${signatory?.designations || ''})`.trim()
+
+      const consigneeDetails = aiInjectConsignee && signatory
+        ? `Signatory Name: ${signatory.names || ''}\nDesignation: ${signatory.designations || ''}`
         : '';
 
       const payload = {
         prompt: aiPrompt,
         wordLimit: aiWordLimit || 150,
-        companyInfo: companyInfoStr,
-        consigneeInfo: consigneeInfoStr,
+        companyInfo: companyDetails,
+        consigneeInfo: consigneeDetails,
         apiKey: settings.geminiApiKey || '',
         modelId: settings.geminiModelId || 'gemini-2.5-flash',
       };
@@ -416,6 +423,67 @@ const Generate: React.FC<GenerateProps> = ({
     } catch {
       messageApi.error('Failed to save documents');
     }
+  };
+
+  // Pre-fill form values with company data when entering wizard step 1
+  const initWizardFormValues = () => {
+    const formattedToday = formatDateFormatted(new Date());
+    const vars = selectedTemplates.flatMap((t) => parseVariables(t.variables));
+    const uniqueVars = vars.filter((v, idx, self) => v.show_in_form && self.findIndex((sv) => sv.key === v.key) === idx);
+
+    const defaults: Record<string, string> = { ...unifiedFormValues };
+
+    // Set company and signatory defaults
+    if (!defaults.company_name) defaults.company_name = settings.companyName || '';
+    if (!defaults.company_address) defaults.company_address = settings.companyAddress || '';
+    if (!defaults.signatory_name) defaults.signatory_name = signatory?.names || '';
+    if (!defaults.signatory_designation) defaults.signatory_designation = signatory?.designations || '';
+
+    // Match any other variable keys to company data
+    for (const v of uniqueVars) {
+      if (!defaults[v.key]) {
+        const matched = getCompanyDataForVariableKey(v.key, settings);
+        if (matched !== null && matched !== undefined) {
+          defaults[v.key] = matched;
+        } else if (v.type === 'date') {
+          defaults[v.key] = formattedToday;
+        }
+      }
+    }
+    setUnifiedFormValues(defaults);
+
+    // Initialize dynamic table rows
+    const tableDefaults: Record<string, Record<string, string>[]> = { ...dynamicTableValues };
+    for (const v of uniqueVars) {
+      if (v.type === 'dynamic_table' && !tableDefaults[v.key]) {
+        tableDefaults[v.key] = [{}];
+      }
+    }
+    setDynamicTableValues(tableDefaults);
+  };
+
+  // Helpers for dynamic table in wizard
+  const addTableRow = (varKey: string) => {
+    setDynamicTableValues((prev) => ({ ...prev, [varKey]: [...(prev[varKey] || []), {}] }));
+  };
+  const removeTableRow = (varKey: string, rowIndex: number) => {
+    setDynamicTableValues((prev) => ({ ...prev, [varKey]: (prev[varKey] || []).filter((_, i) => i !== rowIndex) }));
+  };
+  const updateTableCell = (varKey: string, rowIndex: number, colName: string, val: string) => {
+    setDynamicTableValues((prev) => {
+      const rows = [...(prev[varKey] || [])];
+      rows[rowIndex] = { ...rows[rowIndex], [colName]: val };
+      return { ...prev, [varKey]: rows };
+    });
+  };
+
+  const safeDayjs = (val?: string) => {
+    if (!val) return dayjs();
+    const formats = ['DD MMMM YYYY', 'DD MMM YYYY', 'YYYY-MM-DD', 'DD-MM-YYYY'];
+    const parsed = dayjs(val, formats, true);
+    if (parsed.isValid()) return parsed;
+    const fallback = dayjs(val);
+    return fallback.isValid() ? fallback : dayjs();
   };
 
   if (loading) {
@@ -853,6 +921,7 @@ const Generate: React.FC<GenerateProps> = ({
             <Button
               type="primary"
               icon={<DownloadOutlined />}
+              loading={savingCustomDoc}
               onClick={() => handleSaveCustomDocument(true)}
             >
               Save &amp; Download PDF
@@ -874,6 +943,7 @@ const Generate: React.FC<GenerateProps> = ({
               key="download"
               type="primary"
               icon={<DownloadOutlined />}
+              loading={savingCustomDoc}
               onClick={() => {
                 setCustomPreviewModal(false);
                 handleSaveCustomDocument(true);
@@ -1039,36 +1109,89 @@ const Generate: React.FC<GenerateProps> = ({
                     (v, idx, self) =>
                       v.show_in_form && self.findIndex((sv) => sv.key === v.key) === idx,
                   )
-                  .map((v) => (
-                    <Col xs={24} sm={v.type === 'textarea' ? 24 : 12} key={v.key}>
-                      <Form.Item label={v.label} required={v.required}>
-                        {v.type === 'textarea' ? (
-                          <Input.TextArea
-                            rows={3}
-                            placeholder={v.placeholder}
-                            value={unifiedFormValues[v.key] || ''}
-                            onChange={(e) =>
-                              setUnifiedFormValues((prev) => ({
-                                ...prev,
-                                [v.key]: e.target.value,
-                              }))
-                            }
-                          />
-                        ) : (
-                          <Input
-                            placeholder={v.placeholder}
-                            value={unifiedFormValues[v.key] || ''}
-                            onChange={(e) =>
-                              setUnifiedFormValues((prev) => ({
-                                ...prev,
-                                [v.key]: e.target.value,
-                              }))
-                            }
-                          />
-                        )}
-                      </Form.Item>
-                    </Col>
-                  ))}
+                  .map((v) => {
+                    if (v.type === 'dynamic_table') {
+                      const cols = (v.columns || '').split(',').map((c) => c.trim()).filter(Boolean);
+                      const rows = dynamicTableValues[v.key] || [{}];
+                      return (
+                        <Col span={24} key={v.key} style={{ marginBottom: 24 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <Typography.Text strong>{v.label} (Dynamic Table)</Typography.Text>
+                            <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => addTableRow(v.key)}>Add Row</Button>
+                          </div>
+                          <Card size="small" style={{ background: '#fafafa' }}>
+                            {rows.map((row, rIdx) => (
+                              <Row gutter={12} key={rIdx} align="middle" style={{ marginBottom: 8 }}>
+                                {cols.map((col) => (
+                                  <Col flex="1" key={col}>
+                                    <Input
+                                      placeholder={col}
+                                      value={row[col] || ''}
+                                      onChange={(e) => updateTableCell(v.key, rIdx, col, e.target.value)}
+                                    />
+                                  </Col>
+                                ))}
+                                {rows.length > 1 && (
+                                  <Col flex="none">
+                                    <Button danger type="text" icon={<DeleteOutlined />} onClick={() => removeTableRow(v.key, rIdx)} />
+                                  </Col>
+                                )}
+                              </Row>
+                            ))}
+                          </Card>
+                        </Col>
+                      );
+                    }
+                    return (
+                      <Col xs={24} sm={v.type === 'textarea' ? 24 : 12} key={v.key}>
+                        <Form.Item
+                          label={v.label}
+                          required={v.required}
+                          validateStatus={v.required && !unifiedFormValues[v.key]?.trim() ? 'error' : undefined}
+                        >
+                          {v.type === 'textarea' ? (
+                            <Input.TextArea
+                              rows={3}
+                              placeholder={v.placeholder}
+                              value={unifiedFormValues[v.key] || ''}
+                              onChange={(e) =>
+                                setUnifiedFormValues((prev) => ({ ...prev, [v.key]: e.target.value }))
+                              }
+                            />
+                          ) : v.type === 'number' ? (
+                            <InputNumber
+                              style={{ width: '100%' }}
+                              placeholder={v.placeholder}
+                              value={unifiedFormValues[v.key] ? Number(unifiedFormValues[v.key]) : undefined}
+                              onChange={(val) =>
+                                setUnifiedFormValues((prev) => ({ ...prev, [v.key]: String(val ?? '') }))
+                              }
+                            />
+                          ) : v.type === 'date' ? (
+                            <DatePicker
+                              style={{ width: '100%' }}
+                              format="DD MMMM YYYY"
+                              value={safeDayjs(unifiedFormValues[v.key])}
+                              onChange={(dateObj, dateStr) => {
+                                const val = dateObj
+                                  ? dateObj.format('DD MMMM YYYY')
+                                  : typeof dateStr === 'string' ? dateStr : '';
+                                setUnifiedFormValues((prev) => ({ ...prev, [v.key]: val }));
+                              }}
+                            />
+                          ) : (
+                            <Input
+                              placeholder={v.placeholder}
+                              value={unifiedFormValues[v.key] || ''}
+                              onChange={(e) =>
+                                setUnifiedFormValues((prev) => ({ ...prev, [v.key]: e.target.value }))
+                              }
+                            />
+                          )}
+                        </Form.Item>
+                      </Col>
+                    );
+                  })}
               </Row>
             </Form>
           </Card>
@@ -1129,7 +1252,12 @@ const Generate: React.FC<GenerateProps> = ({
           <Button
             type="primary"
             disabled={step === 0 && selectedTemplateIds.length === 0}
-            onClick={() => setStep((s) => s + 1)}
+            onClick={() => {
+              if (step === 0) {
+                initWizardFormValues();
+              }
+              setStep((s) => s + 1);
+            }}
           >
             Next
           </Button>

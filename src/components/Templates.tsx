@@ -3,6 +3,7 @@ import {
   EditOutlined,
   LoadingOutlined,
   PlusOutlined,
+  ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
 import {
@@ -60,6 +61,8 @@ const Templates = () => {
     data: templates,
     loading,
     setData: setTemplates,
+    refresh: refreshTemplates,
+    refreshing: refreshingTemplates,
   } = useCache<Template[]>('templates', 'all', [], fetchTemplates);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -251,9 +254,12 @@ const Templates = () => {
             Manage reusable templates with dynamic form variables
           </Typography.Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
-          Create Template
-        </Button>
+        <Space>
+          <Button icon={<ReloadOutlined />} loading={refreshingTemplates} onClick={refreshTemplates}>Refresh</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
+            Create Template
+          </Button>
+        </Space>
       </div>
 
       <Input

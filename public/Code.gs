@@ -300,8 +300,8 @@ function generateLetterWithAI(payload) {
     "3. Do not output code fences or extra plain text.";
 
   const userMessage = "User Request: " + promptText + "\n" +
-    (companyInfo ? "Company Details: " + companyInfo + "\n" : "") +
-    (consigneeInfo ? "Consignee / Signatory Details: " + consigneeInfo + "\n" : "");
+    (companyInfo ? "\nMy company details are as follows:\n" + companyInfo + "\n" : "") +
+    (consigneeInfo ? "\nSignatory / Authorized Person Details:\n" + consigneeInfo + "\n" : "");
 
   const url = "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelId) + ":generateContent?key=" + encodeURIComponent(apiKey);
 

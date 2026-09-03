@@ -185,7 +185,8 @@ const Settings = () => {
     try {
       setSaving(true);
       await serverCall('saveCompanySettings', settings);
-      messageApi.success('Settings saved successfully');
+      messageApi.success('Settings saved successfully. Reloading...');
+      setTimeout(() => window.location.reload(), 1000);
     } catch (err) {
       messageApi.error(err instanceof Error ? err.message : 'Could not save settings.');
     } finally {
