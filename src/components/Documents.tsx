@@ -4,9 +4,8 @@ import {
   CheckCircleOutlined,
   DeleteOutlined,
   DownloadOutlined,
+  EditOutlined,
   EyeOutlined,
-  FileAddOutlined,
-  FileTextOutlined,
   FileZipOutlined,
   LoadingOutlined,
   PlusOutlined,
@@ -42,17 +41,18 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(customParseFormat);
 dayjs.extend(relativeTime);
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useCache } from '../hooks/useCache';
 import {
   serverCall,
   parseVariables,
+  getCompanyDataForVariableKey,
   type CompanySettings,
   type DocumentRecord,
   type Template,
   type TemplateVariable,
 } from '../lib/types';
-import RichTextEditor from './RichTextEditor';
+import RichTextEditor, { type RichTextEditorRef } from './RichTextEditor';
 
 const BLANK_SETTINGS: CompanySettings = {
   companyName: '', companyAddress: '', PAN: '', GST: '', MSME: '',
@@ -150,10 +150,13 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
   };
 
   // Custom Document Editor state
+  const [editingSNo, setEditingSNo] = useState<string | null>(null);
+  const [editingCreatedOn, setEditingCreatedOn] = useState<string | null>(null);
   const [customDocTitle, setCustomDocTitle] = useState('');
   const [customDocDate, setCustomDocDate] = useState(formatDateFormatted(new Date()));
   const [customContent, setCustomContent] = useState('');
   const [customPreviewModal, setCustomPreviewModal] = useState(false);
+  const customEditorRef = useRef<RichTextEditorRef>(null);
 
   // List View state (Homepage)
   const [docSearchTerm, setDocSearchTerm] = useState('');
@@ -206,8 +209,13 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
       signatory_designation: signatory?.designations || unifiedFormValues.signatory_designation || '',
     };
     for (const v of uniqueFormVariables) {
-      if (v.type === 'date' && !defaults[v.key]) {
-        defaults[v.key] = formattedToday;
+      if (!defaults[v.key]) {
+        const matched = getCompanyDataForVariableKey(v.key, settings);
+        if (matched !== null && matched !== undefined) {
+          defaults[v.key] = matched;
+        } else if (v.type === 'date') {
+          defaults[v.key] = formattedToday;
+        }
       }
     }
     setUnifiedFormValues(defaults);
@@ -249,6 +257,8 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
 
       for (const v of vars) {
         const pattern = new RegExp(`\\{\\{${v.key}\\}\\}`, 'g');
+        const companyMatched = getCompanyDataForVariableKey(v.key, settings);
+
         if (v.type === 'dynamic_table') {
           const tableHtml = renderDynamicTableHtml(v, tables[v.key] || []);
           html = html.replace(pattern, tableHtml);
@@ -262,6 +272,8 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
           html = html.replace(pattern, values[v.key] || signatory?.names || '');
         } else if (v.key === 'signatory_designation') {
           html = html.replace(pattern, values[v.key] || signatory?.designations || '');
+        } else if (companyMatched !== null) {
+          html = html.replace(pattern, values[v.key] || companyMatched);
         } else {
           html = html.replace(pattern, values[v.key] || '');
         }
@@ -315,7 +327,8 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
       const bidNo = unifiedFormValues['gem_bid_no'] || unifiedFormValues['bid_no'] || '';
       const dateVal = unifiedFormValues['date'] || formatDateFormatted(new Date());
 
-      for (const tmpl of selectedTemplates) {
+      for (let i = 0; i < selectedTemplates.length; i++) {
+        const tmpl = selectedTemplates[i];
         const titleName = bidNo ? `Bid No: ${bidNo}` : `Date: ${dateVal}`;
         const title = `${tmpl.name} - ${titleName}`;
 
@@ -325,7 +338,7 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
         };
 
         const docRecord: DocumentRecord = {
-          sNo: String(Date.now() + Math.floor(Math.random() * 1000)),
+          sNo: String(Date.now() + i + Math.floor(Math.random() * 100)),
           createdOn,
           templateId: tmpl.id,
           title,
@@ -333,12 +346,12 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
           pdfUrl: '',
         };
         newDocs.push(docRecord);
-
-        // Async call to Google Sheets
-        serverCall('saveDocument', docRecord).catch(() => { });
       }
 
       setDocuments((prev) => [...newDocs, ...prev]);
+
+      // Bulk call to Google Sheets
+      serverCall('saveDocuments', newDocs).catch(() => { });
       messageApi.success('Documents saved to sheet automatically!');
     } catch {
       messageApi.error('Failed to save documents');
@@ -509,15 +522,13 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
     });
   };
 
-  // Quick Insert helper for custom document editor (inline insertion without extra line breaks)
+  // Quick Insert helper for custom document editor (inline insertion at active cursor without extra line breaks)
   const insertValueIntoCustomContent = (val: string) => {
-    setCustomContent((prev) => {
-      if (!prev || prev === '<p></p>' || prev.trim() === '') return `<p>${val}</p>`;
-      if (prev.endsWith('</p>')) {
-        return prev.slice(0, -4) + ` ${val}</p>`;
-      }
-      return `${prev} ${val}`;
-    });
+    if (customEditorRef.current) {
+      customEditorRef.current.insertAtCursor(val);
+    } else {
+      setCustomContent((prev) => `${prev} ${val}`);
+    }
     messageApi.success('Value inserted!');
   };
 
@@ -532,9 +543,9 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
       return;
     }
 
-    const createdOn = new Date().toISOString();
+    const createdOn = editingCreatedOn || new Date().toISOString();
     const docRecord: DocumentRecord = {
-      sNo: String(Date.now() + Math.floor(Math.random() * 1000)),
+      sNo: editingSNo || String(Date.now() + Math.floor(Math.random() * 1000)),
       createdOn,
       templateId: '',
       title: customDocTitle.trim(),
@@ -545,17 +556,48 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
 
     try {
       await serverCall('saveDocument', docRecord);
-      setDocuments((prev) => [docRecord, ...prev]);
-      messageApi.success('Custom document saved successfully!');
+      setDocuments((prev) => {
+        const exists = prev.some((d) => d.sNo === docRecord.sNo);
+        return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
+      });
+      messageApi.success('Document saved successfully!');
     } catch {
-      setDocuments((prev) => [docRecord, ...prev]);
-      messageApi.info('Custom document saved to cache');
+      setDocuments((prev) => {
+        const exists = prev.some((d) => d.sNo === docRecord.sNo);
+        return exists ? prev.map((d) => (d.sNo === docRecord.sNo ? docRecord : d)) : [docRecord, ...prev];
+      });
+      messageApi.info('Document saved to cache');
     }
 
     if (downloadPdfAfterSave) {
       downloadDocRecord(docRecord);
     }
     setMode('list');
+  };
+
+  // Edit existing document/letter
+  const handleEditDoc = (doc: DocumentRecord) => {
+    setEditingSNo(doc.sNo);
+    setEditingCreatedOn(doc.createdOn);
+    setCustomDocTitle(doc.title);
+    setCustomDocDate(formatDateFormatted(doc.createdOn));
+
+    let contentToEdit = doc.content || '';
+    if (!contentToEdit && doc.templateId) {
+      const tmpl = templates.find((t) => t.id === doc.templateId);
+      if (tmpl) {
+        let vals: Record<string, string> = {};
+        let tbls: Record<string, Record<string, string>[]> = {};
+        try {
+          const parsed = JSON.parse(doc.variableValues);
+          vals = parsed.formValues || parsed || {};
+          tbls = parsed.tables || {};
+        } catch { }
+        contentToEdit = resolveContent(tmpl, vals, tbls);
+      }
+    }
+    setCustomContent(contentToEdit);
+    setMode('custom_editor');
   };
 
   // Filter templates for step 0
@@ -704,6 +746,7 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
 
           <Form.Item label="Letter Body Editor" required>
             <RichTextEditor
+              ref={customEditorRef}
               value={customContent}
               onChange={setCustomContent}
               variables={[]}
@@ -802,14 +845,6 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
             <Typography.Title level={2} style={{ margin: 0 }}>Documents</Typography.Title>
             <Typography.Text type="secondary">Generated letters and official documents</Typography.Text>
           </div>
-          <Space>
-            <Button icon={<FileAddOutlined />} onClick={() => { setMode('custom_editor'); setCustomDocTitle(''); setCustomDocDate(formatDateFormatted(new Date())); setCustomContent(''); }}>
-              Create Custom Document
-            </Button>
-            <Button type="primary" icon={<FileTextOutlined />} onClick={() => { setMode('generate'); setStep(0); setSelectedTemplateIds([]); setUnifiedFormValues({}); setDynamicTableValues({}); }}>
-              Generate Documents
-            </Button>
-          </Space>
         </div>
 
         {/* Toolbar: Search, Filter, Sort, Bulk Download */}
@@ -897,6 +932,9 @@ const Documents = ({ externalSignatoryIdx, onSelectSignatoryIdx }: DocumentsProp
               key: 'action',
               render: (_, record) => (
                 <Space>
+                  <Tooltip title="Edit Letter">
+                    <Button size="small" icon={<EditOutlined />} onClick={() => handleEditDoc(record)} />
+                  </Tooltip>
                   <Tooltip title="Preview">
                     <Button size="small" icon={<EyeOutlined />} onClick={() => openDocPreviewModal(record)} />
                   </Tooltip>

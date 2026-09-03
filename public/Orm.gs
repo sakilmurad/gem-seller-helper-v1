@@ -179,6 +179,7 @@ class SheetORM {
       throw new Error('SheetORM: cannot insert, sheet has no header row.');
     }
     const records = Array.isArray(data) ? data : [data];
+    if (records.length === 0) return 0;
 
     const rows = records.map(record =>
       headers.map(h => (record.hasOwnProperty(h) ? record[h] : ''))
@@ -189,6 +190,34 @@ class SheetORM {
       .setValues(rows);
 
     return records.length;
+  }
+
+  /**
+   * Bulk inserts an array of record objects in a single batch call.
+   * Lock service can be used if concurrent execution is expected.
+   */
+  insertMany(records) {
+    if (!Array.isArray(records)) {
+      throw new Error('SheetORM.insertMany expects an array of record objects.');
+    }
+    if (records.length === 0) return 0;
+    const lock = LockService.getScriptLock();
+    try {
+      lock.waitLock(10000);
+      const headers = this._getHeaders();
+      if (headers.length === 0) {
+        throw new Error('SheetORM: cannot bulk insert, sheet has no header row.');
+      }
+      const rows = records.map(record =>
+        headers.map(h => (record.hasOwnProperty(h) ? record[h] : ''))
+      );
+      this.sheet
+        .getRange(this.sheet.getLastRow() + 1, 1, rows.length, headers.length)
+        .setValues(rows);
+      return records.length;
+    } finally {
+      lock.releaseLock();
+    }
   }
 
   /**

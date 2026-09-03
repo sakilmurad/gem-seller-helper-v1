@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Layout } from 'antd';
 import Sidebar from './components/Sidebar';
+import Generate from './components/Generate';
 import Documents from './components/Documents';
 import Settings from './components/Settings';
 import Templates from './components/Templates';
@@ -37,7 +38,7 @@ const fetchSettings = async (): Promise<CompanySettings> => {
 };
 
 function App() {
-  const [selectedKey, setSelectedKey] = useState('documents');
+  const [selectedKey, setSelectedKey] = useState('generate');
   const [selectedSignatoryIdx, setSelectedSignatoryIdx] = useState<number | null>(null);
 
   const { data: settings } = useCache<CompanySettings>(
@@ -60,6 +61,13 @@ function App() {
     : getEffectiveDefaultSignatoryIndex(settings);
 
   const views = {
+    generate: (
+      <Generate
+        onNavigateToDocuments={() => setSelectedKey('documents')}
+        externalSignatoryIdx={activeSignatoryIdx}
+        onSelectSignatoryIdx={setSelectedSignatoryIdx}
+      />
+    ),
     documents: (
       <Documents
         externalSignatoryIdx={activeSignatoryIdx}

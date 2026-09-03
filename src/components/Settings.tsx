@@ -41,6 +41,8 @@ const BLANK_SETTINGS: CompanySettings = {
   marginRight: 15,
   marginBottom: 15,
   signatories: [],
+  geminiApiKey: '',
+  geminiModelId: 'gemini-2.5-flash',
 };
 
 declare global {
@@ -248,6 +250,32 @@ const Settings = () => {
               <Col xs={24} md={12}>
                 <Form.Item label="MSME">
                   <Input value={settings.MSME} onChange={(e) => update('MSME', e.target.value)} />
+                </Form.Item>
+              </Col>
+            </Row>
+          </Form>
+        </Card>
+
+        {/* AI & Gemini Configuration */}
+        <Card title="Gemini AI Configuration" variant="outlined">
+          <Form layout="vertical">
+            <Row gutter={16}>
+              <Col xs={24} md={14}>
+                <Form.Item label="Gemini API Key (GEMINI_API_KEY)">
+                  <Input.Password
+                    placeholder="e.g. AIzaSy..."
+                    value={settings.geminiApiKey || ''}
+                    onChange={(e) => update('geminiApiKey', e.target.value)}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={10}>
+                <Form.Item label="Model ID (MODEL_ID)">
+                  <Input
+                    placeholder="e.g. gemini-2.5-flash"
+                    value={settings.geminiModelId || 'gemini-2.5-flash'}
+                    onChange={(e) => update('geminiModelId', e.target.value)}
+                  />
                 </Form.Item>
               </Col>
             </Row>

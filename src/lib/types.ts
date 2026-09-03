@@ -20,19 +20,55 @@ export type CompanySettings = {
   marginBottom: number;
   defaultSignatoryIndex?: number;
   signatories: Signatory[];
+  geminiApiKey?: string;
+  geminiModelId?: string;
 };
 
 export const getEffectiveDefaultSignatoryIndex = (settings: CompanySettings): number => {
   if (!settings.signatories || settings.signatories.length === 0) return 0;
+  
+  // 1. Prioritize explicit isDefault === true on signatory object
+  const foundIdx = settings.signatories.findIndex(
+    (s) => s.isDefault === true || String(s.isDefault).toLowerCase() === 'true'
+  );
+  if (foundIdx !== -1) {
+    return foundIdx;
+  }
+
+  // 2. Fallback to defaultSignatoryIndex setting if valid
   if (
     settings.defaultSignatoryIndex !== undefined &&
+    settings.defaultSignatoryIndex !== null &&
     settings.defaultSignatoryIndex >= 0 &&
     settings.defaultSignatoryIndex < settings.signatories.length
   ) {
     return settings.defaultSignatoryIndex;
   }
-  const found = settings.signatories.findIndex((s) => s.isDefault);
-  return found !== -1 ? found : 0;
+
+  return 0;
+};
+
+/** Match variable keys to company profile settings (PAN, GST, MSME, Company Name, Address) */
+export const getCompanyDataForVariableKey = (key: string, settings: CompanySettings): string | null => {
+  if (!key || !settings) return null;
+  const k = key.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (['pan', 'panno', 'pannumber', 'companypan', 'companypanno'].includes(k)) {
+    return settings.PAN || '';
+  }
+  if (['gst', 'gstno', 'gstnumber', 'gstin', 'companygst', 'companygstin'].includes(k)) {
+    return settings.GST || '';
+  }
+  if (['msme', 'msmeno', 'msmenumber', 'companymsme', 'companymsmeno'].includes(k)) {
+    return settings.MSME || '';
+  }
+  if (['companyname', 'nameofcompany', 'company'].includes(k)) {
+    return settings.companyName || '';
+  }
+  if (['companyaddress', 'addressofcompany', 'address'].includes(k)) {
+    return settings.companyAddress || '';
+  }
+  return null;
 };
 
 export interface TemplateVariable {

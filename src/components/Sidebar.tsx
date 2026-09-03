@@ -1,8 +1,8 @@
-import React from 'react';
 import {
   BookOutlined,
   FileTextOutlined,
   SettingOutlined,
+  ThunderboltOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
@@ -20,6 +20,7 @@ type SidebarProps = {
 };
 
 const items: MenuProps['items'] = [
+  { key: 'generate', icon: <ThunderboltOutlined />, label: 'Generate' },
   { key: 'documents', icon: <FileTextOutlined />, label: 'Documents' },
   { key: 'templates', icon: <BookOutlined />, label: 'Templates' },
   { key: 'settings', icon: <SettingOutlined />, label: 'Settings' },
